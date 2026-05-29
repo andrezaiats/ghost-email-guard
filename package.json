@@ -1,0 +1,12 @@
+{
+  "name": "ghost-email-guard",
+  "version": "1.0.0",
+  "private": false,
+  "description": "Lightweight sidecar proxy that blocks disposable/temporary email signups on Ghost",
+  "main": "server.js",
+  "keywords": ["ghost", "email", "disposable", "spam", "proxy", "blocker"],
+  "license": "MIT",
+  "dependencies": {
+    "http-proxy": "^1.18.1"
+  }
+}

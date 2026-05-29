@@ -1,0 +1,25 @@
+# Example: add this service alongside your Ghost container
+#
+# Adjust GHOST_URL if Ghost is on a different host/port.
+# After starting, route /members/api/send-magic-link/ to port 2369
+# in your reverse proxy (see README for Nginx/Caddy examples).
+
+services:
+  ghost-email-guard:
+    build: ./ghost-email-guard
+    container_name: ghost-email-guard
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - PORT=2369
+      - GHOST_URL=http://127.0.0.1:2368
+      - ALLOWLIST_PATH=/app/allowlist.conf
+      # - UPDATE_INTERVAL_HOURS=24
+      # - BLOCK_MESSAGE=Disposable email addresses are not allowed. Please use a permanent email.
+    volumes:
+      - ./ghost-email-guard/allowlist.conf:/app/allowlist.conf
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2369/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

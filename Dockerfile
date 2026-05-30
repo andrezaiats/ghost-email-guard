@@ -8,7 +8,7 @@ ADD https://raw.githubusercontent.com/disposable-email-domains/disposable-email-
 COPY package.json ./
 RUN npm install --omit=dev
 
-COPY blocklist.js server.js ./
+COPY blocklist.js ratelimit.js server.js ./
 
 EXPOSE 2369
 

@@ -1,12 +1,15 @@
 const http = require('http');
 const httpProxy = require('http-proxy');
 const blocklist = require('./blocklist');
+const ratelimit = require('./ratelimit');
 
 const GHOST_TARGET = process.env.GHOST_URL || 'http://127.0.0.1:2368';
 const PORT = parseInt(process.env.PORT, 10) || 2369;
 const MAX_BODY = 10 * 1024; // 10 KB
 const BLOCK_MESSAGE = process.env.BLOCK_MESSAGE ||
   'Disposable email addresses are not allowed. Please use a permanent email.';
+const RATE_LIMIT_MESSAGE = process.env.RATE_LIMIT_MESSAGE ||
+  'Too many signup attempts. Please try again later.';
 
 const proxy = httpProxy.createProxyServer({ target: GHOST_TARGET, xfwd: true });
 
@@ -61,14 +64,32 @@ function sendBlock(res) {
 const server = http.createServer(async (req, res) => {
   // Healthcheck
   if (req.method === 'GET' && req.url === '/healthz') {
-    const s = blocklist.stats();
+    const bs = blocklist.stats();
+    const rs = ratelimit.stats();
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', blocklist: s.blocklist, allowlist: s.allowlist }));
+    res.end(JSON.stringify({ status: 'ok', blocklist: bs.blocklist, allowlist: bs.allowlist, ratelimit: rs }));
     return;
   }
 
   // Only intercept POST to the magic-link endpoint
   if (req.method === 'POST' && req.url.startsWith('/members/api/send-magic-link')) {
+    // Rate limiting by IP (checked before parsing body)
+    const clientIP = req.headers['x-forwarded-for']?.split(',')[0]?.trim()
+      || req.headers['x-real-ip']
+      || req.socket.remoteAddress;
+    if (ratelimit.isRateLimited(clientIP)) {
+      const retryAfter = ratelimit.retryAfterSeconds(clientIP);
+      console.log(`[ratelimited] IP ${clientIP} (retry after ${retryAfter}s)`);
+      res.writeHead(429, {
+        'Content-Type': 'application/json',
+        'Retry-After': String(retryAfter),
+      });
+      res.end(JSON.stringify({
+        errors: [{ message: RATE_LIMIT_MESSAGE, type: 'TooManyRequestsError' }],
+      }));
+      return;
+    }
+
     let body;
     try {
       body = await bufferBody(req);

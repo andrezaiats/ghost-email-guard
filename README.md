@@ -20,11 +20,12 @@ Only the signup endpoint is routed through the guard. All other traffic goes str
 
 When a signup request arrives, the guard:
 
-1. Buffers and parses the JSON body
-2. Extracts the email domain (case-insensitive)
-3. Checks it against a blocklist of ~5,500 known disposable email domains
-4. If disposable → returns `400` with a user-friendly error message
-5. If legitimate → proxies the request to Ghost unchanged
+1. Checks **rate limiting** by client IP — if the IP has exceeded the configured threshold, returns `429 Too Many Requests` immediately
+2. Buffers and parses the JSON body
+3. Extracts the email domain (case-insensitive)
+4. Checks it against a blocklist of ~5,500 known disposable email domains
+5. If disposable → returns `400` with a user-friendly error message
+6. If legitimate → proxies the request to Ghost unchanged
 
 The blocklist comes from the community-maintained [disposable-email-domains](https://github.com/disposable-email-domains/disposable-email-domains) project. A snapshot is baked into the Docker image at build time (works offline), and the list auto-updates every 24 hours.
 
@@ -107,6 +108,9 @@ All settings are via environment variables:
 | `ALLOWLIST_PATH` | `/app/allowlist.conf` | Path to the allowlist file |
 | `UPDATE_INTERVAL_HOURS` | `24` | Hours between blocklist updates |
 | `BLOCK_MESSAGE` | `Disposable email addresses are not allowed. Please use a permanent email.` | Error message shown to blocked users |
+| `RATE_LIMIT_MAX` | `5` | Maximum signup requests per IP per window |
+| `RATE_LIMIT_WINDOW_MINUTES` | `60` | Time window in minutes for rate limiting |
+| `RATE_LIMIT_MESSAGE` | `Too many signup attempts. Please try again later.` | Error message shown to rate-limited users |
 
 ## Allowlist
 
@@ -127,14 +131,14 @@ docker restart ghost-email-guard
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/healthz` | GET | Health check — returns blocklist/allowlist counts |
-| `/members/api/send-magic-link/` | POST | Intercepted: validates email, blocks or proxies |
+| `/healthz` | GET | Health check — returns blocklist/allowlist/ratelimit stats |
+| `/members/api/send-magic-link/` | POST | Intercepted: rate limit → validate email → block or proxy |
 | `*` | any | Transparent proxy to Ghost |
 
 ## Testing
 
 ```bash
-# Should be blocked (400)
+# Should be blocked — disposable email (400)
 curl -s -w "\n%{http_code}\n" -X POST http://localhost:2369/members/api/send-magic-link/ \
   -H 'Content-Type: application/json' \
   -d '{"email":"troll@10minutemail.com","emailType":"signup"}'
@@ -143,7 +147,24 @@ curl -s -w "\n%{http_code}\n" -X POST http://localhost:2369/members/api/send-mag
 curl -s -w "\n%{http_code}\n" -X POST http://localhost:2369/members/api/send-magic-link/ \
   -H 'Content-Type: application/json' \
   -d '{"email":"real@gmail.com","emailType":"signup"}'
+
+# Should be rate limited after exceeding threshold (429)
+for i in $(seq 1 6); do
+  echo "Request $i:"
+  curl -s -w "\n%{http_code}\n" -X POST http://localhost:2369/members/api/send-magic-link/ \
+    -H 'Content-Type: application/json' \
+    -d '{"email":"test'$i'@gmail.com","emailType":"signup"}'
+  echo "---"
+done
 ```
+
+## Rate limiting
+
+The guard includes per-IP rate limiting on the signup endpoint to prevent enumeration attacks and brute-force spam. When an IP exceeds the configured threshold, subsequent requests receive a `429 Too Many Requests` response with a `Retry-After` header.
+
+Rate limiting runs **before** email validation, so an attacker flooding the endpoint gets cut off without the guard even reading the request body.
+
+The rate limiter uses a fixed window strategy with automatic cleanup of expired entries every 5 minutes. It reads the client IP from `X-Forwarded-For` (first entry) or `X-Real-IP` headers, falling back to the socket address.
 
 ## How the blocklist stays fresh
 
